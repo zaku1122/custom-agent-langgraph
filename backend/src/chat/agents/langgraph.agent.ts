@@ -326,7 +326,8 @@ import { BaseMessage, HumanMessage, AIMessage, SystemMessage } from '@langchain/
 import { answerAgent, streamAnswerAgent } from './answer.agent';
 import { searchAgent, extractSearchQuery } from './search.agent';
 import { imageAgent, extractImagePrompt } from './image.agent';
-import { SearchResult } from '../dto/chat.dto';
+import { fileAgent, isFileGenerationRequest, FileGenerationResult } from './file.agent';
+import { SearchResult, FileResult } from '../dto/chat.dto';
 import { chatClient, azureConfig } from '../../config/azure';
 
 // ============================================================================
@@ -334,7 +335,7 @@ import { chatClient, azureConfig } from '../../config/azure';
 // ============================================================================
 
 interface RouterDecision {
-  agent: 'answer' | 'search' | 'image';
+  agent: 'answer' | 'search' | 'image' | 'file';
   reasoning: string;
   confidence: number;
 }
@@ -344,21 +345,29 @@ interface RouterDecision {
  * Much more accurate than regex-based routing
  */
 async function intelligentRouter(query: string): Promise<RouterDecision> {
+  // Quick check for file generation requests (xlsx, excel, spreadsheet)
+  if (isFileGenerationRequest(query)) {
+    console.log('[Intelligent Router] File generation request detected');
+    return { agent: 'file', reasoning: 'User requested file/spreadsheet generation', confidence: 0.95 };
+  }
+
   const systemPrompt = `You are an intelligent router that analyzes user queries and determines which specialized agent should handle them.
 
 Available agents:
 1. **answer** - General Q&A, explanations, coding help, math, conversations, advice, creative writing
 2. **search** - Queries requiring real-time/current information, news, recent events, factual lookups, comparisons
 3. **image** - Requests to generate, create, draw, or visualize images/pictures/artwork
+4. **file** - Requests to generate/create data files, spreadsheets, excel files, xlsx files, CSV exports
 
 Analyze the user's query and respond with a JSON object:
 {
-  "agent": "answer" | "search" | "image",
+  "agent": "answer" | "search" | "image" | "file",
   "reasoning": "Brief explanation of why this agent was chosen",
   "confidence": 0.0-1.0
 }
 
 Guidelines:
+- Choose "file" if user wants to CREATE/GENERATE/EXPORT data as xlsx, excel, spreadsheet, or downloadable file
 - Choose "image" if user wants to CREATE/GENERATE visual content (not just asking about images)
 - Choose "search" if user needs CURRENT/RECENT information or facts that may have changed
 - Choose "answer" for general questions, explanations, code, math, or conversations
@@ -412,7 +421,7 @@ const GraphState = Annotation.Root({
     reducer: (prev, next) => next ?? prev,
     default: () => '',
   }),
-  agentType: Annotation<'answer' | 'search' | 'image' | undefined>({
+  agentType: Annotation<'answer' | 'search' | 'image' | 'file' | undefined>({
     reducer: (prev, next) => next ?? prev,
     default: () => undefined,
   }),
@@ -421,6 +430,10 @@ const GraphState = Annotation.Root({
     default: () => undefined,
   }),
   imageUrl: Annotation<string | undefined>({
+    reducer: (prev, next) => next ?? prev,
+    default: () => undefined,
+  }),
+  fileResult: Annotation<FileGenerationResult | undefined>({
     reducer: (prev, next) => next ?? prev,
     default: () => undefined,
   }),
@@ -501,6 +514,20 @@ async function imageNode(state: GraphStateType): Promise<Partial<GraphStateType>
   };
 }
 
+async function fileNode(state: GraphStateType): Promise<Partial<GraphStateType>> {
+  console.log('[File Node] Generating file...');
+
+  const result = await fileAgent(state.userQuery);
+
+  console.log(`[File Node] File generated: ${result.filename}`);
+
+  return {
+    fileResult: result,
+    finalResponse: `File generated: ${result.filename}`,
+    messages: [...state.messages, new AIMessage(`Generated file: ${result.filename} - ${result.description}`)],
+  };
+}
+
 // CONDITIONAL EDGES
 
 function routeAfterRouter(state: GraphStateType): string {
@@ -508,6 +535,8 @@ function routeAfterRouter(state: GraphStateType): string {
     return 'image';
   } else if (state.agentType === 'search') {
     return 'search';
+  } else if (state.agentType === 'file') {
+    return 'file';
   }
   return 'answer';
 }
@@ -527,6 +556,7 @@ export function createLangGraphAgent() {
   workflow.addNode('search', searchNode);
   workflow.addNode('answer', answerNode);
   workflow.addNode('image', imageNode);
+  workflow.addNode('file', fileNode);
 
   // Add edges
   workflow.addEdge(START, 'router');
@@ -535,6 +565,7 @@ export function createLangGraphAgent() {
     search: 'search',
     answer: 'answer',
     image: 'image',
+    file: 'file',
   });
 
   workflow.addConditionalEdges('search', routeAfterSearch, {
@@ -543,6 +574,7 @@ export function createLangGraphAgent() {
 
   workflow.addEdge('answer', END);
   workflow.addEdge('image', END);
+  workflow.addEdge('file', END);
 
   return workflow.compile();
 }
@@ -581,6 +613,7 @@ export function createStreamingLangGraphAgent() {
   workflow.addNode('search', searchNode);
   workflow.addNode('answer', streamingAnswerNode);
   workflow.addNode('image', imageNode);
+  workflow.addNode('file', fileNode);
 
   workflow.addEdge(START, 'router');
   
@@ -588,6 +621,7 @@ export function createStreamingLangGraphAgent() {
     search: 'search',
     answer: 'answer',
     image: 'image',
+    file: 'file',
   });
 
   workflow.addConditionalEdges('search', routeAfterSearch, {
@@ -596,6 +630,7 @@ export function createStreamingLangGraphAgent() {
 
   workflow.addEdge('answer', END);
   workflow.addEdge('image', END);
+  workflow.addEdge('file', END);
 
   return workflow.compile();
 }
@@ -615,6 +650,7 @@ export async function executeLangGraph(
     agentType: undefined,
     searchResults: undefined,
     imageUrl: undefined,
+    fileResult: undefined,
     finalResponse: undefined,
   };
 
@@ -643,6 +679,7 @@ export async function executeLangGraphStreaming(
     agentType: undefined,
     searchResults: undefined,
     imageUrl: undefined,
+    fileResult: undefined,
     finalResponse: undefined,
   };
 
@@ -671,6 +708,7 @@ export async function* streamLangGraphEvents(
     agentType: undefined,
     searchResults: undefined,
     imageUrl: undefined,
+    fileResult: undefined,
     finalResponse: undefined,
   };
 

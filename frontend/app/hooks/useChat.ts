@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useRef } from 'react';
-import { Message, StreamChunk, SearchResult, Citation } from '../types/chat';
+import { Message, StreamChunk, SearchResult, Citation, FileResult } from '../types/chat';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -266,6 +266,18 @@ export function useChat() {
                       prev.map(m =>
                         m.id === assistantMessageId
                           ? { ...m, imageUrl, content: 'Generated image', type: 'image', agentType: 'image' }
+                          : m
+                      )
+                    );
+                    break;
+
+                  case 'file':
+                    const fileResult: FileResult = data.content;
+                    messageType = 'file';
+                    setMessages(prev =>
+                      prev.map(m =>
+                        m.id === assistantMessageId
+                          ? { ...m, fileResult, content: fileResult.description, type: 'file', agentType: 'file' }
                           : m
                       )
                     );

@@ -43,6 +43,18 @@ export class ChatService {
         };
       }
 
+      if (result.agentType === 'file' && result.fileResult) {
+        return {
+          type: 'file',
+          content: result.fileResult,
+          agentType: 'file',
+          metadata: {
+            timestamp: new Date().toISOString(),
+            fileResult: result.fileResult,
+          },
+        };
+      }
+
       // Default: text response
       return {
         type: 'text',
@@ -113,6 +125,14 @@ export class ChatService {
           yield {
             type: 'image',
             content: nodeData.imageUrl,
+            timestamp: new Date().toISOString(),
+          };
+        }
+
+        if (nodeName === 'file' && nodeData.fileResult) {
+          yield {
+            type: 'file',
+            content: nodeData.fileResult,
             timestamp: new Date().toISOString(),
           };
         }
