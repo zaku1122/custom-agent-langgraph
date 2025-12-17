@@ -13,7 +13,91 @@ export function useChat() {
 
   const generateId = () => Math.random().toString(36).substring(2, 15);
 
-  // Upload PDF and get document ID
+  // Upload any document and get document ID + analysis
+  const uploadDocument = async (file: File): Promise<{ documentId: string; analysis: any } | null> => {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const response = await fetch(`${API_URL}/documents/upload`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error('Document upload failed');
+      }
+
+      const data = await response.json();
+      return { documentId: data.documentId, analysis: data.analysis };
+    } catch (error) {
+      console.error('Document upload error:', error);
+      return null;
+    }
+  };
+
+  // Query document with streaming
+  const queryDocument = async (
+    documentId: string,
+    query: string,
+    assistantMessageId: string
+  ) => {
+    const response = await fetch(`${API_URL}/documents/query/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ documentId, query }),
+      signal: abortControllerRef.current?.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error('Document query failed');
+    }
+
+    const reader = response.body?.getReader();
+    const decoder = new TextDecoder();
+
+    if (!reader) {
+      throw new Error('No response body');
+    }
+
+    let accumulatedContent = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      const chunk = decoder.decode(value);
+      const lines = chunk.split('\n');
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6));
+
+            if (data.type === 'text_chunk') {
+              accumulatedContent += data.content;
+              setMessages(prev =>
+                prev.map(m =>
+                  m.id === assistantMessageId
+                    ? { ...m, content: accumulatedContent, type: 'text', agentType: 'answer' }
+                    : m
+                )
+              );
+            }
+
+            if (data.type === 'info') {
+              // Document info received
+              setCurrentAgent('document');
+            }
+          } catch (e) {
+            // Ignore JSON parse errors
+          }
+        }
+      }
+    }
+  };
+
+  // Upload PDF and get document ID (legacy support)
   const uploadPdf = async (file: File): Promise<string | null> => {
     try {
       const formData = new FormData();
@@ -107,11 +191,19 @@ export function useChat() {
     return { content: accumulatedContent, citations };
   };
 
-  const sendMessage = useCallback(async (content: string, pdfFile?: File, selectedText?: string) => {
-    if ((!content.trim() && !pdfFile) || isLoading) return;
+  const sendMessage = useCallback(async (content: string, attachedFile?: File, selectedText?: string) => {
+    if ((!content.trim() && !attachedFile) || isLoading) return;
+
+    // Determine file type
+    const isDocument = attachedFile && (
+      attachedFile.type === 'application/pdf' ||
+      attachedFile.type.includes('word') ||
+      attachedFile.type.startsWith('text/')
+    );
+    const isImage = attachedFile?.type.startsWith('image/');
 
     // Build user message content
-    let displayContent = content.trim() || 'Analyze this PDF';
+    let displayContent = content.trim() || (attachedFile ? `Analyze this ${isImage ? 'image' : 'document'}` : '');
     if (selectedText) {
       displayContent = `[About: "${selectedText.substring(0, 50)}${selectedText.length > 50 ? '...' : ''}"]\n\n${displayContent}`;
     }
@@ -122,7 +214,7 @@ export function useChat() {
       role: 'user',
       content: displayContent,
       type: 'text',
-      pdfName: pdfFile?.name,
+      pdfName: attachedFile?.name, // Keep for backwards compatibility
       timestamp: new Date(),
     };
 
@@ -145,36 +237,54 @@ export function useChat() {
     try {
       abortControllerRef.current = new AbortController();
 
-      // If PDF is attached, handle it specially
-      if (pdfFile) {
-        setCurrentAgent('pdf');
+      // If file is attached, handle it with document loader
+      if (attachedFile) {
+        setCurrentAgent(isImage ? 'image' : 'document');
         
         // Show uploading status
         setMessages(prev =>
           prev.map(m =>
             m.id === assistantMessageId
-              ? { ...m, content: 'Uploading and processing PDF...', type: 'loading' }
+              ? { ...m, content: `Uploading and processing ${isImage ? 'image' : 'document'}...`, type: 'loading' }
               : m
           )
         );
 
-        // Upload PDF
-        const documentId = await uploadPdf(pdfFile);
+        // Upload document
+        const result = await uploadDocument(attachedFile);
         
-        if (!documentId) {
-          throw new Error('Failed to upload PDF');
+        if (!result) {
+          throw new Error('Failed to upload file');
         }
 
-        // Query the PDF
+        // Show analysis first if available
+        if (result.analysis?.summary) {
+          setMessages(prev =>
+            prev.map(m =>
+              m.id === assistantMessageId
+                ? { 
+                    ...m, 
+                    content: `**Document Analysis:**\n\n${result.analysis.summary}\n\n**Key Points:**\n${result.analysis.keyPoints?.map((p: string) => `• ${p}`).join('\n') || 'N/A'}\n\n---\n\n*Answering your question...*`, 
+                    type: 'text',
+                    agentType: 'answer'
+                  }
+                : m
+            )
+          );
+        }
+
+        // Query the document
         setMessages(prev =>
           prev.map(m =>
-            m.id === assistantMessageId
-              ? { ...m, content: 'Analyzing document...', type: 'loading' }
-              : m
+            m.id === assistantMessageId && m.content.includes('Answering your question')
+              ? { ...m }
+              : m.id === assistantMessageId
+                ? { ...m, content: 'Analyzing document...', type: 'loading' }
+                : m
           )
         );
 
-        await queryPdf(documentId, content.trim() || 'Summarize this document', assistantMessageId, selectedText);
+        await queryDocument(result.documentId, content.trim() || 'Summarize this document', assistantMessageId);
         
       } else {
         // Regular chat flow (no PDF)

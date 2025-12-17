@@ -2,12 +2,28 @@
 
 import { useState, useRef, useEffect, KeyboardEvent, ChangeEvent } from 'react';
 
+// Supported file types
+const SUPPORTED_TYPES = {
+  'application/pdf': { icon: '📄', label: 'PDF', color: 'from-red-500 to-orange-500' },
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': { icon: '📝', label: 'DOCX', color: 'from-blue-500 to-indigo-500' },
+  'application/msword': { icon: '📝', label: 'DOC', color: 'from-blue-500 to-indigo-500' },
+  'text/plain': { icon: '📃', label: 'TXT', color: 'from-slate-500 to-slate-600' },
+  'text/markdown': { icon: '📃', label: 'MD', color: 'from-slate-500 to-slate-600' },
+  'text/csv': { icon: '📊', label: 'CSV', color: 'from-green-500 to-emerald-500' },
+  'image/png': { icon: '🖼️', label: 'PNG', color: 'from-purple-500 to-pink-500' },
+  'image/jpeg': { icon: '🖼️', label: 'JPG', color: 'from-purple-500 to-pink-500' },
+  'image/webp': { icon: '🖼️', label: 'WEBP', color: 'from-purple-500 to-pink-500' },
+  'image/gif': { icon: '🖼️', label: 'GIF', color: 'from-purple-500 to-pink-500' },
+};
+
+const ACCEPT_STRING = '.pdf,.docx,.doc,.txt,.md,.csv,.png,.jpg,.jpeg,.webp,.gif';
+
 interface ChatInputProps {
-  onSend: (message: string, pdfFile?: File) => void;
+  onSend: (message: string, file?: File) => void;
   isLoading: boolean;
   onStop: () => void;
-  onPdfAttach?: (file: File | null) => void;
-  attachedPdf?: File | null;
+  onFileAttach?: (file: File | null) => void;
+  attachedFile?: File | null;
   selectedText?: string;
 }
 
@@ -15,8 +31,8 @@ export function ChatInput({
   onSend, 
   isLoading, 
   onStop, 
-  onPdfAttach, 
-  attachedPdf,
+  onFileAttach, 
+  attachedFile,
   selectedText 
 }: ChatInputProps) {
   const [message, setMessage] = useState('');
@@ -33,8 +49,8 @@ export function ChatInput({
   }, [message]);
 
   const handleSubmit = () => {
-    if ((message.trim() || attachedPdf) && !isLoading) {
-      onSend(message, attachedPdf || undefined);
+    if ((message.trim() || attachedFile) && !isLoading) {
+      onSend(message, attachedFile || undefined);
       setMessage('');
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto';
@@ -51,10 +67,13 @@ export function ChatInput({
 
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file && file.type === 'application/pdf') {
-      onPdfAttach?.(file);
-    } else if (file) {
-      alert('Please upload a PDF file');
+    if (file) {
+      const isSupported = file.type in SUPPORTED_TYPES;
+      if (isSupported) {
+        onFileAttach?.(file);
+      } else {
+        alert(`Unsupported file type. Supported: PDF, DOCX, TXT, MD, CSV, PNG, JPG, WEBP, GIF`);
+      }
     }
     // Reset input so same file can be selected again
     if (fileInputRef.current) {
@@ -62,8 +81,13 @@ export function ChatInput({
     }
   };
 
-  const handleRemovePdf = () => {
-    onPdfAttach?.(null);
+  const handleRemoveFile = () => {
+    onFileAttach?.(null);
+  };
+
+  // Get file type info
+  const getFileInfo = (file: File) => {
+    return SUPPORTED_TYPES[file.type as keyof typeof SUPPORTED_TYPES] || { icon: '📎', label: 'File', color: 'from-slate-500 to-slate-600' };
   };
 
   return (
@@ -85,21 +109,28 @@ export function ChatInput({
           </div>
         )}
 
-        {/* Attached PDF Preview (only show if no PDF viewer open) */}
-        {attachedPdf && !selectedText && (
+        {/* Attached File Preview */}
+        {attachedFile && !selectedText && (
           <div className="mb-3 flex items-center gap-2 px-3 py-2 bg-slate-800/50 rounded-xl border border-slate-700/50">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-red-500 to-orange-500 flex items-center justify-center">
-              <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
-                      d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-              </svg>
+            <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${getFileInfo(attachedFile).color} flex items-center justify-center text-lg`}>
+              {getFileInfo(attachedFile).icon}
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-slate-200 truncate">{attachedPdf.name}</p>
-              <p className="text-xs text-slate-400">{(attachedPdf.size / 1024 / 1024).toFixed(2)} MB • Select text in viewer to ask specific questions</p>
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-medium text-slate-200 truncate">{attachedFile.name}</p>
+                <span className="px-1.5 py-0.5 text-[10px] font-bold rounded bg-slate-700 text-slate-300">
+                  {getFileInfo(attachedFile).label}
+                </span>
+              </div>
+              <p className="text-xs text-slate-400">
+                {(attachedFile.size / 1024 / 1024).toFixed(2)} MB • 
+                {attachedFile.type.startsWith('image/') 
+                  ? ' Image will be analyzed with Vision AI'
+                  : ' Document will be parsed for Q&A'}
+              </p>
             </div>
             <button
-              onClick={handleRemovePdf}
+              onClick={handleRemoveFile}
               className="p-1.5 rounded-lg hover:bg-slate-700/50 text-slate-400 hover:text-slate-200 transition-colors"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -114,22 +145,22 @@ export function ChatInput({
           <input
             ref={fileInputRef}
             type="file"
-            accept=".pdf,application/pdf"
+            accept={ACCEPT_STRING}
             onChange={handleFileChange}
             className="hidden"
           />
 
-          {/* PDF Upload button */}
+          {/* File Upload button */}
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={isLoading}
             className={`flex-shrink-0 w-12 h-12 rounded-xl border transition-all duration-200
                        flex items-center justify-center
-                       ${attachedPdf 
-                         ? 'bg-orange-500/20 border-orange-500/30 text-orange-400' 
+                       ${attachedFile 
+                         ? 'bg-cyan-500/20 border-cyan-500/30 text-cyan-400' 
                          : 'bg-slate-800/50 border-slate-700/50 text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'}
                        disabled:opacity-50 disabled:cursor-not-allowed`}
-            title={attachedPdf ? 'Change PDF' : 'Attach PDF'}
+            title={attachedFile ? 'Change file' : 'Attach file (PDF, DOCX, TXT, images)'}
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
@@ -150,8 +181,8 @@ export function ChatInput({
                 placeholder={
                   selectedText 
                     ? "Ask about the selected text..." 
-                    : attachedPdf 
-                      ? "Ask about the PDF... (or select text in viewer)" 
+                    : attachedFile 
+                      ? `Ask about the ${getFileInfo(attachedFile).label} file...`
                       : "Ask anything... (Shift+Enter for new line)"
                 }
                 disabled={isLoading}
@@ -187,7 +218,7 @@ export function ChatInput({
           ) : (
             <button
               onClick={handleSubmit}
-              disabled={!message.trim() && !attachedPdf}
+              disabled={!message.trim() && !attachedFile}
               className="flex-shrink-0 w-12 h-12 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 
                         text-white shadow-lg shadow-cyan-500/25 hover:shadow-cyan-500/40 
                         hover:scale-105 active:scale-95 transition-all duration-200
@@ -209,7 +240,8 @@ export function ChatInput({
             { label: '🔍 Search news', prompt: 'What are the latest AI news today?' },
             { label: '🎨 Generate image', prompt: 'Generate an image of a futuristic city at sunset' },
             { label: '💡 Explain', prompt: 'Explain quantum computing in simple terms' },
-            ...(attachedPdf ? [{ label: '📄 Summarize PDF', prompt: 'Summarize this document in detail' }] : []),
+            { label: '📊 Create XLSX', prompt: 'Create an Excel file with sample employee data' },
+            ...(attachedFile ? [{ label: `📄 Summarize ${getFileInfo(attachedFile).label}`, prompt: 'Summarize this document in detail' }] : []),
           ].map((item, index) => (
             <button
               key={index}
