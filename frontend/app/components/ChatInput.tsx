@@ -3,20 +3,23 @@
 import { useState, useRef, useEffect, KeyboardEvent, ChangeEvent } from 'react';
 
 // Supported file types
-const SUPPORTED_TYPES = {
+const SUPPORTED_TYPES: Record<string, { icon: string; label: string; color: string }> = {
   'application/pdf': { icon: '📄', label: 'PDF', color: 'from-red-500 to-orange-500' },
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': { icon: '📝', label: 'DOCX', color: 'from-blue-500 to-indigo-500' },
   'application/msword': { icon: '📝', label: 'DOC', color: 'from-blue-500 to-indigo-500' },
   'text/plain': { icon: '📃', label: 'TXT', color: 'from-slate-500 to-slate-600' },
   'text/markdown': { icon: '📃', label: 'MD', color: 'from-slate-500 to-slate-600' },
   'text/csv': { icon: '📊', label: 'CSV', color: 'from-green-500 to-emerald-500' },
+  'application/csv': { icon: '📊', label: 'CSV', color: 'from-green-500 to-emerald-500' },
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': { icon: '📊', label: 'XLSX', color: 'from-green-500 to-emerald-500' },
+  'application/vnd.ms-excel': { icon: '📊', label: 'XLS', color: 'from-green-500 to-emerald-500' },
   'image/png': { icon: '🖼️', label: 'PNG', color: 'from-purple-500 to-pink-500' },
   'image/jpeg': { icon: '🖼️', label: 'JPG', color: 'from-purple-500 to-pink-500' },
   'image/webp': { icon: '🖼️', label: 'WEBP', color: 'from-purple-500 to-pink-500' },
   'image/gif': { icon: '🖼️', label: 'GIF', color: 'from-purple-500 to-pink-500' },
 };
 
-const ACCEPT_STRING = '.pdf,.docx,.doc,.txt,.md,.csv,.png,.jpg,.jpeg,.webp,.gif';
+const ACCEPT_STRING = '.pdf,.docx,.doc,.txt,.md,.csv,.xlsx,.xls,.png,.jpg,.jpeg,.webp,.gif';
 
 interface ChatInputProps {
   onSend: (message: string, file?: File) => void;
@@ -68,11 +71,15 @@ export function ChatInput({
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const isSupported = file.type in SUPPORTED_TYPES;
+      // Check by MIME type or extension (browsers sometimes report wrong MIME for CSV/XLSX)
+      const ext = file.name.toLowerCase().split('.').pop();
+      const supportedExtensions = ['pdf', 'docx', 'doc', 'txt', 'md', 'csv', 'xlsx', 'xls', 'png', 'jpg', 'jpeg', 'webp', 'gif'];
+      const isSupported = file.type in SUPPORTED_TYPES || (ext && supportedExtensions.includes(ext));
+      
       if (isSupported) {
         onFileAttach?.(file);
       } else {
-        alert(`Unsupported file type. Supported: PDF, DOCX, TXT, MD, CSV, PNG, JPG, WEBP, GIF`);
+        alert(`Unsupported file type. Supported: PDF, DOCX, TXT, MD, CSV, XLSX, PNG, JPG, WEBP, GIF`);
       }
     }
     // Reset input so same file can be selected again
@@ -85,9 +92,26 @@ export function ChatInput({
     onFileAttach?.(null);
   };
 
-  // Get file type info
+  // Get file type info (check MIME type first, then extension)
   const getFileInfo = (file: File) => {
-    return SUPPORTED_TYPES[file.type as keyof typeof SUPPORTED_TYPES] || { icon: '📎', label: 'File', color: 'from-slate-500 to-slate-600' };
+    if (file.type in SUPPORTED_TYPES) {
+      return SUPPORTED_TYPES[file.type];
+    }
+    
+    // Fallback to extension-based detection
+    const ext = file.name.toLowerCase().split('.').pop();
+    const extMap: Record<string, { icon: string; label: string; color: string }> = {
+      'csv': { icon: '📊', label: 'CSV', color: 'from-green-500 to-emerald-500' },
+      'xlsx': { icon: '📊', label: 'XLSX', color: 'from-green-500 to-emerald-500' },
+      'xls': { icon: '📊', label: 'XLS', color: 'from-green-500 to-emerald-500' },
+      'pdf': { icon: '📄', label: 'PDF', color: 'from-red-500 to-orange-500' },
+      'docx': { icon: '📝', label: 'DOCX', color: 'from-blue-500 to-indigo-500' },
+      'doc': { icon: '📝', label: 'DOC', color: 'from-blue-500 to-indigo-500' },
+      'txt': { icon: '📃', label: 'TXT', color: 'from-slate-500 to-slate-600' },
+      'md': { icon: '📃', label: 'MD', color: 'from-slate-500 to-slate-600' },
+    };
+    
+    return extMap[ext || ''] || { icon: '📎', label: 'File', color: 'from-slate-500 to-slate-600' };
   };
 
   return (

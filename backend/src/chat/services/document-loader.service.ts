@@ -1,15 +1,17 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { PDFParse } from 'pdf-parse';
 import * as mammoth from 'mammoth';
+import * as XLSX from 'xlsx';
 import { chatClient, azureConfig } from '../../config/azure';
 
 export interface LoadedDocument {
-  type: 'pdf' | 'docx' | 'text' | 'image';
+  type: 'pdf' | 'docx' | 'text' | 'image' | 'spreadsheet';
   filename: string;
   content: string; // Extracted text content
   pageCount?: number;
   imageBase64?: string; // For images, store base64 for vision API
   mimeType: string;
+  tableData?: { headers: string[]; rows: string[][] }; // For spreadsheets
 }
 
 export interface DocumentAnalysis {
@@ -30,7 +32,10 @@ export class DocumentLoaderService {
     'application/msword': 'docx',
     'text/plain': 'text',
     'text/markdown': 'text',
-    'text/csv': 'text',
+    'text/csv': 'csv',
+    'application/csv': 'csv',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+    'application/vnd.ms-excel': 'xlsx',
     'image/png': 'image',
     'image/jpeg': 'image',
     'image/jpg': 'image',
@@ -42,6 +47,7 @@ export class DocumentLoaderService {
    * Check if file type is supported
    */
   isSupported(mimeType: string): boolean {
+    // Also check by file extension for CSV/XLSX that might have wrong MIME
     return mimeType in this.supportedTypes;
   }
 
@@ -49,14 +55,22 @@ export class DocumentLoaderService {
    * Get supported file extensions for UI
    */
   getSupportedExtensions(): string[] {
-    return ['.pdf', '.docx', '.doc', '.txt', '.md', '.csv', '.png', '.jpg', '.jpeg', '.webp', '.gif'];
+    return ['.pdf', '.docx', '.doc', '.txt', '.md', '.csv', '.xlsx', '.xls', '.png', '.jpg', '.jpeg', '.webp', '.gif'];
   }
 
   /**
    * Load document and extract content
    */
   async loadDocument(file: Express.Multer.File): Promise<LoadedDocument> {
-    const mimeType = file.mimetype;
+    let mimeType = file.mimetype;
+    
+    // Handle extension-based detection for CSV/XLSX with incorrect MIME types
+    const ext = file.originalname.toLowerCase().split('.').pop();
+    if (ext === 'csv' && !mimeType.includes('csv')) {
+      mimeType = 'text/csv';
+    } else if ((ext === 'xlsx' || ext === 'xls') && !mimeType.includes('spreadsheet') && !mimeType.includes('excel')) {
+      mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    }
     
     if (!this.isSupported(mimeType)) {
       throw new BadRequestException(
@@ -74,6 +88,10 @@ export class DocumentLoaderService {
         return this.loadDocx(file);
       case 'text':
         return this.loadText(file);
+      case 'csv':
+        return this.loadCsv(file);
+      case 'xlsx':
+        return this.loadXlsx(file);
       case 'image':
         return this.loadImage(file);
       default:
@@ -141,6 +159,117 @@ export class DocumentLoaderService {
     } catch (error: any) {
       this.logger.error(`Text loading error: ${error.message}`);
       throw new BadRequestException(`Failed to load text file: ${error.message}`);
+    }
+  }
+
+  /**
+   * Load CSV file
+   */
+  private async loadCsv(file: Express.Multer.File): Promise<LoadedDocument> {
+    try {
+      const csvContent = file.buffer.toString('utf-8');
+      const lines = csvContent.split('\n').filter(line => line.trim());
+      
+      if (lines.length === 0) {
+        throw new Error('Empty CSV file');
+      }
+
+      // Parse CSV (simple parsing, handles quoted values)
+      const parseRow = (row: string): string[] => {
+        const result: string[] = [];
+        let current = '';
+        let inQuotes = false;
+        
+        for (const char of row) {
+          if (char === '"') {
+            inQuotes = !inQuotes;
+          } else if (char === ',' && !inQuotes) {
+            result.push(current.trim());
+            current = '';
+          } else {
+            current += char;
+          }
+        }
+        result.push(current.trim());
+        return result;
+      };
+
+      const headers = parseRow(lines[0]);
+      const rows = lines.slice(1).map(parseRow);
+
+      // Convert to readable text format
+      const textContent = `CSV Data (${rows.length} rows, ${headers.length} columns)\n\n` +
+        `Headers: ${headers.join(' | ')}\n\n` +
+        rows.slice(0, 50).map((row, i) => `Row ${i + 1}: ${row.join(' | ')}`).join('\n') +
+        (rows.length > 50 ? `\n... and ${rows.length - 50} more rows` : '');
+
+      return {
+        type: 'spreadsheet',
+        filename: file.originalname,
+        content: textContent,
+        mimeType: file.mimetype,
+        tableData: { headers, rows: rows.slice(0, 100) }, // Limit to 100 rows for preview
+      };
+    } catch (error: any) {
+      this.logger.error(`CSV loading error: ${error.message}`);
+      throw new BadRequestException(`Failed to load CSV: ${error.message}`);
+    }
+  }
+
+  /**
+   * Load XLSX/XLS file using xlsx library
+   */
+  private async loadXlsx(file: Express.Multer.File): Promise<LoadedDocument> {
+    try {
+      const workbook = XLSX.read(file.buffer, { type: 'buffer' });
+      
+      // Get all sheet names
+      const sheetNames = workbook.SheetNames;
+      
+      let allContent = '';
+      let primaryTableData: { headers: string[]; rows: string[][] } | undefined;
+
+      for (const sheetName of sheetNames) {
+        const sheet = workbook.Sheets[sheetName];
+        
+        // Convert to JSON
+        const jsonData = XLSX.utils.sheet_to_json<string[]>(sheet, { header: 1 });
+        
+        if (jsonData.length === 0) continue;
+
+        // Get headers and rows
+        const headers = (jsonData[0] || []).map(h => String(h || ''));
+        const rows = jsonData.slice(1).map(row => 
+          (row || []).map(cell => String(cell || ''))
+        );
+
+        // Store first sheet's data as primary
+        if (!primaryTableData && headers.length > 0) {
+          primaryTableData = { headers, rows: rows.slice(0, 100) };
+        }
+
+        // Build text content
+        allContent += `\n=== Sheet: ${sheetName} (${rows.length} rows) ===\n`;
+        allContent += `Headers: ${headers.join(' | ')}\n\n`;
+        allContent += rows.slice(0, 30).map((row, i) => 
+          `Row ${i + 1}: ${row.join(' | ')}`
+        ).join('\n');
+        
+        if (rows.length > 30) {
+          allContent += `\n... and ${rows.length - 30} more rows\n`;
+        }
+      }
+
+      return {
+        type: 'spreadsheet',
+        filename: file.originalname,
+        content: `Excel File: ${file.originalname}\nSheets: ${sheetNames.join(', ')}\n${allContent}`,
+        mimeType: file.mimetype,
+        tableData: primaryTableData,
+      };
+    } catch (error: any) {
+      this.logger.error(`XLSX loading error: ${error.message}`);
+      throw new BadRequestException(`Failed to load Excel file: ${error.message}`);
     }
   }
 
