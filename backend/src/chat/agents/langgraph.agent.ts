@@ -327,10 +327,81 @@ import { answerAgent, streamAnswerAgent } from './answer.agent';
 import { searchAgent, extractSearchQuery } from './search.agent';
 import { imageAgent, extractImagePrompt } from './image.agent';
 import { SearchResult } from '../dto/chat.dto';
+import { chatClient, azureConfig } from '../../config/azure';
 
 // ============================================================================
-// STATE DEFINITION
+// INTELLIGENT LLM-BASED ROUTER
 // ============================================================================
+
+interface RouterDecision {
+  agent: 'answer' | 'search' | 'image';
+  reasoning: string;
+  confidence: number;
+}
+
+/**
+ * LLM-based intelligent router that analyzes user intent
+ * Much more accurate than regex-based routing
+ */
+async function intelligentRouter(query: string): Promise<RouterDecision> {
+  const systemPrompt = `You are an intelligent router that analyzes user queries and determines which specialized agent should handle them.
+
+Available agents:
+1. **answer** - General Q&A, explanations, coding help, math, conversations, advice, creative writing
+2. **search** - Queries requiring real-time/current information, news, recent events, factual lookups, comparisons
+3. **image** - Requests to generate, create, draw, or visualize images/pictures/artwork
+
+Analyze the user's query and respond with a JSON object:
+{
+  "agent": "answer" | "search" | "image",
+  "reasoning": "Brief explanation of why this agent was chosen",
+  "confidence": 0.0-1.0
+}
+
+Guidelines:
+- Choose "image" if user wants to CREATE/GENERATE visual content (not just asking about images)
+- Choose "search" if user needs CURRENT/RECENT information or facts that may have changed
+- Choose "answer" for general questions, explanations, code, math, or conversations
+- When in doubt between search and answer, prefer "answer" unless explicitly asking for recent/current info
+
+Respond ONLY with the JSON object, no other text.`;
+
+  try {
+    console.log('[Intelligent Router] Analyzing query with LLM...');
+    
+    const response = await chatClient.chat.completions.create({
+      model: azureConfig.chat.deployment,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: query },
+      ],
+      max_tokens: 150,
+      temperature: 0.1, // Low temperature for consistent classification
+    });
+
+    const content = response.choices[0]?.message?.content || '';
+    
+    // Parse JSON response
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const decision = JSON.parse(jsonMatch[0]) as RouterDecision;
+      console.log(`[Intelligent Router] Decision: ${decision.agent} (confidence: ${decision.confidence})`);
+      console.log(`[Intelligent Router] Reasoning: ${decision.reasoning}`);
+      return decision;
+    }
+    
+    // Fallback if JSON parsing fails
+    console.log('[Intelligent Router] Failed to parse LLM response, defaulting to answer');
+    return { agent: 'answer', reasoning: 'Fallback - could not parse LLM response', confidence: 0.5 };
+    
+  } catch (error: any) {
+    console.error('[Intelligent Router] Error:', error.message);
+    // Fallback to answer agent on error
+    return { agent: 'answer', reasoning: 'Fallback - router error', confidence: 0.5 };
+  }
+}
+
+// STATE DEFINITION
 
 const GraphState = Annotation.Root({
   messages: Annotation<BaseMessage[]>({
@@ -365,30 +436,22 @@ const GraphState = Annotation.Root({
 
 type GraphStateType = typeof GraphState.State;
 
-// ============================================================================
 // NODE FUNCTIONS
-// ============================================================================
 
 async function routerNode(state: GraphStateType): Promise<Partial<GraphStateType>> {
-  const query = state.userQuery.toLowerCase();
-  let agentType: 'answer' | 'search' | 'image' = 'answer';
-
   console.log('[Router] Analyzing query:', state.userQuery);
 
-  // Image generation patterns
-  if (/image|draw|generate.*image|create.*image|picture|render|make.*picture|show me.*visual/i.test(query)) {
-    agentType = 'image';
-  }
-  // Search patterns
-  else if (/latest|recent|news|current|today|search|find|lookup|cite|source|compare|who (is|was)|when (did|was|is)|where (is|was)|what happened|how many/i.test(query)) {
-    agentType = 'search';
-  }
+  // Use LLM-based intelligent router
+  const decision = await intelligentRouter(state.userQuery);
+  
+  const agentType = decision.agent;
 
   console.log(`[Router] Selected agent: ${agentType}`);
+  console.log(`[Router] Confidence: ${(decision.confidence * 100).toFixed(0)}%`);
 
   return {
     agentType,
-    messages: [...state.messages, new SystemMessage(`Agent selected: ${agentType}`)],
+    messages: [...state.messages, new SystemMessage(`Agent selected: ${agentType} (${decision.reasoning})`)],
   };
 }
 
@@ -438,9 +501,7 @@ async function imageNode(state: GraphStateType): Promise<Partial<GraphStateType>
   };
 }
 
-// ============================================================================
 // CONDITIONAL EDGES
-// ============================================================================
 
 function routeAfterRouter(state: GraphStateType): string {
   if (state.agentType === 'image') {
@@ -455,9 +516,7 @@ function routeAfterSearch(state: GraphStateType): string {
   return 'answer';
 }
 
-// ============================================================================
 // BUILD GRAPH
-// ============================================================================
 
 export function createLangGraphAgent() {
   // Cast to any to bypass strict type checking
@@ -488,9 +547,7 @@ export function createLangGraphAgent() {
   return workflow.compile();
 }
 
-// ============================================================================
 // STREAMING VERSION
-// ============================================================================
 
 async function streamingAnswerNode(state: GraphStateType): Promise<Partial<GraphStateType>> {
   console.log('[Streaming Answer Node] Starting stream...');
@@ -543,9 +600,7 @@ export function createStreamingLangGraphAgent() {
   return workflow.compile();
 }
 
-// ============================================================================
 // HELPER FUNCTIONS
-// ============================================================================
 
 export async function executeLangGraph(
   userQuery: string,

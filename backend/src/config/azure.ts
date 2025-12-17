@@ -32,6 +32,10 @@ export const azureConfig = {
     deployment: process.env.AZURE_OPENAI_IMAGE_DEPLOYMENT || 'dall-e-3',
     apiVersion: process.env.AZURE_OPENAI_IMAGE_API_VERSION || '2024-02-01',
   },
+  bing: {
+    apiKey: process.env.AZURE_BING_SEARCH_KEY || '',
+    endpoint: process.env.AZURE_BING_SEARCH_ENDPOINT || 'https://api.bing.microsoft.com/v7.0/search',
+  },
 };
 
 // Create Azure OpenAI clients

@@ -1,49 +1,55 @@
-import { azureConfig, chatClient } from '../../config/azure';
+import axios from 'axios';
+import { azureConfig } from '../../config/azure';
 import { SearchResult } from '../dto/chat.dto';
 
 /**
- * Search Agent using Azure OpenAI
- * Uses GPT's knowledge to provide search-like responses
+ * Search Agent using Azure Bing Search API
  */
 export async function searchAgent(query: string): Promise<SearchResult[]> {
   try {
     console.log('[Search Agent] Searching for:', query);
 
-    const response = await chatClient.chat.completions.create({
-      model: azureConfig.chat.deployment,
-      messages: [
-        {
-          role: 'system',
-          content: `You are a search assistant. Provide relevant, factual information about the query.
-Format your response as a clear, informative summary with key facts and details.
-If the topic requires recent information, mention that your knowledge has a cutoff date.`,
-        },
-        {
-          role: 'user',
-          content: query,
-        },
-      ],
-      max_tokens: 800,
-      temperature: 0.3,
+    // Ensure endpoint includes the search path
+    let endpoint = azureConfig.bing.endpoint;
+    if (!endpoint.includes('/v7.0/search')) {
+      endpoint = endpoint.replace(/\/$/, '') + '/v7.0/search';
+    }
+
+    const response = await axios.get(endpoint, {
+      headers: {
+        'Ocp-Apim-Subscription-Key': azureConfig.bing.apiKey,
+      },
+      params: {
+        q: query,
+        mkt: 'en-US',
+        count: 5,
+        textDecorations: true,
+        textFormat: 'HTML',
+      },
     });
 
-    const content = response.choices[0]?.message?.content || '';
+    const webPages = response.data?.webPages?.value || [];
+    
+    const results: SearchResult[] = webPages.map((page: any) => ({
+      title: page.name,
+      snippet: page.snippet,
+      url: page.url,
+      date: page.dateLastCrawled || undefined,
+      provider: 'bing',
+    }));
 
-    console.log('[Search Agent] Response generated successfully');
+    console.log(`[Search Agent] Found ${results.length} results`);
 
-    return [{
-      title: 'AI Search Result',
-      snippet: content,
-      url: '',
-      provider: 'azure_openai',
-    }];
+    return results;
   } catch (error: any) {
-    console.error('[Search Agent] Error:', error?.message);
+    console.error('[Search Agent] Error:', error?.response?.data || error?.message);
+    
+    // Return error as search result for graceful degradation
     return [{
       title: 'Search Error',
-      snippet: `Unable to search: ${error?.message || 'Unknown error'}`,
+      snippet: `Failed to search: ${error?.message || 'Unknown error'}`,
       url: '',
-      provider: 'error',
+      provider: 'bing',
     }];
   }
 }

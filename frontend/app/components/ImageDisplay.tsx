@@ -6,6 +6,61 @@ interface ImageDisplayProps {
   imageUrl: string;
 }
 
+// Skeleton component with shimmer animation
+function ImageSkeleton() {
+  return (
+    <div className="relative w-full max-w-md aspect-square rounded-xl overflow-hidden bg-slate-800/50 border border-slate-700/50">
+      {/* Base skeleton background */}
+      <div className="absolute inset-0 bg-gradient-to-br from-slate-800 via-slate-700 to-slate-800" />
+      
+      {/* Shimmer effect - animated gradient that moves across */}
+      <div 
+        className="absolute inset-0 -translate-x-full animate-shimmer"
+        style={{
+          background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent)',
+        }}
+      />
+      
+      {/* Placeholder content inside skeleton */}
+      <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 p-6">
+        {/* Image icon placeholder */}
+        <div className="w-20 h-20 rounded-2xl bg-slate-700/50 flex items-center justify-center">
+          <svg 
+            className="w-10 h-10 text-slate-600" 
+            fill="none" 
+            stroke="currentColor" 
+            viewBox="0 0 24 24"
+          >
+            <path 
+              strokeLinecap="round" 
+              strokeLinejoin="round" 
+              strokeWidth={1.5} 
+              d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" 
+            />
+          </svg>
+        </div>
+        
+        {/* Loading text and progress indicator */}
+        <div className="flex flex-col items-center gap-2">
+          <span className="text-sm font-medium text-slate-400">Generating image...</span>
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-purple-500 animate-pulse" />
+            <div className="w-2 h-2 rounded-full bg-purple-500 animate-pulse" style={{ animationDelay: '150ms' }} />
+            <div className="w-2 h-2 rounded-full bg-purple-500 animate-pulse" style={{ animationDelay: '300ms' }} />
+          </div>
+        </div>
+        
+        {/* Fake progress bar */}
+        <div className="w-48 h-1.5 bg-slate-700/50 rounded-full overflow-hidden">
+          <div 
+            className="h-full bg-gradient-to-r from-purple-500 to-pink-500 rounded-full animate-progress"
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function ImageDisplay({ imageUrl }: ImageDisplayProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -13,21 +68,17 @@ export function ImageDisplay({ imageUrl }: ImageDisplayProps) {
 
   return (
     <div className="relative">
-      {/* Image Container */}
+      {/* Skeleton while loading */}
+      {isLoading && !error && <ImageSkeleton />}
+      
+      {/* Image Container - hidden while loading, shown when ready */}
       <div 
         className={`relative rounded-xl overflow-hidden bg-slate-800/50 border border-slate-700/50
+                   transition-opacity duration-500
+                   ${isLoading ? 'opacity-0 absolute' : 'opacity-100'}
                    ${isExpanded ? 'fixed inset-4 z-50 flex items-center justify-center bg-black/90' : ''}`}
-        onClick={() => !isExpanded && setIsExpanded(true)}
+        onClick={() => !isExpanded && !isLoading && setIsExpanded(true)}
       >
-        {isLoading && !error && (
-          <div className="absolute inset-0 flex items-center justify-center bg-slate-800/80">
-            <div className="flex flex-col items-center gap-3">
-              <div className="w-8 h-8 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
-              <span className="text-sm text-slate-400">Loading image...</span>
-            </div>
-          </div>
-        )}
-        
         {error ? (
           <div className="p-8 flex flex-col items-center justify-center text-slate-400">
             <svg className="w-12 h-12 mb-3 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -106,4 +157,3 @@ export function ImageDisplay({ imageUrl }: ImageDisplayProps) {
     </div>
   );
 }
-

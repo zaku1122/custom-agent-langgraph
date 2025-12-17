@@ -21,5 +21,6 @@ async function bootstrap() {
   console.log(`🚀 Backend running on: http://localhost:${port}`);
   console.log(`📡 Chat endpoint: http://localhost:${port}/chat`);
   console.log(`🌊 Stream endpoint: http://localhost:${port}/chat/stream`);
+  console.log(`📄 PDF endpoint: http://localhost:${port}/pdf`);
 }
 bootstrap();
