@@ -10,19 +10,32 @@ graph TD;
 	search(search)
 	answer(answer)
 	image(image)
+	file(file)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> router;
 	answer --> __end__;
 	image --> __end__;
+	file --> __end__;
 	router -.-> search;
 	router -.-> answer;
 	router -.-> image;
+	router -.-> file;
 	search -.-> answer;
 	classDef default fill:#f2f0ff,line-height:1.2;
 	classDef first fill-opacity:0;
 	classDef last fill:#bfb6fc;
 
 ```
+
+## Agent Descriptions
+
+| Agent | Purpose | Triggers |
+|-------|---------|----------|
+| **router** | LLM-based intelligent routing | All queries |
+| **answer** | General Q&A, coding, explanations | Default for most queries |
+| **search** | Web search for current info | News, recent events, facts |
+| **image** | DALL-E 3 image generation | "generate image", "draw", "create picture" |
+| **file** | XLSX file generation | "xlsx", "excel", "spreadsheet", "export" |
 
 ## How to View
 
