@@ -1,19 +1,206 @@
 'use client';
 
+import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { Message, Citation } from '../types/chat';
+import { Message, Citation, SummarySource } from '../types/chat';
 import { SearchResultCard } from './SearchResultCard';
 import { ImageDisplay } from './ImageDisplay';
 import { FileDisplay } from './FileDisplay';
 
 interface MessageBubbleProps {
   message: Message;
+  onPageClick?: (pageNumber: number, textToHighlight?: string) => void;
+}
+
+// Sources Button Component - shows clickable sources with text previews
+function SourcesButton({ 
+  sources, 
+  onSourceClick 
+}: { 
+  sources: SummarySource[]; 
+  onSourceClick?: (pageNumber: number, textToHighlight?: string) => void;
+}) {
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  if (!sources || sources.length === 0) return null;
+
+  return (
+    <div className="mt-4 pt-4 border-t border-slate-700/50">
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="flex items-center gap-2 px-3 py-2 bg-slate-700/30 hover:bg-slate-700/50 rounded-lg transition-colors w-full"
+      >
+        <svg className="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
+                d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+        </svg>
+        <span className="text-sm font-medium text-slate-300">
+          Sources ({sources.length})
+        </span>
+        <svg 
+          className={`w-4 h-4 ml-auto text-slate-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} 
+          fill="none" stroke="currentColor" viewBox="0 0 24 24"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {isExpanded && (
+        <div className="mt-3 space-y-2">
+          {sources.map((source, idx) => (
+            <div key={source.chunkId || idx} className="flex gap-2">
+              {/* Navigate button */}
+              <button
+                onClick={() => onSourceClick?.(source.pageNumber, source.text)}
+                className="flex-1 flex items-start gap-3 px-3 py-2 bg-slate-700/30 hover:bg-slate-700/50 rounded-lg transition-colors text-left"
+              >
+                <div className="flex-shrink-0 w-6 h-6 rounded-full bg-cyan-500/20 flex items-center justify-center text-xs font-bold text-cyan-400">
+                  {idx + 1}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-xs font-medium text-cyan-400">Page {source.pageNumber}</span>
+                    <span className="text-[10px] text-slate-500">• Click to highlight</span>
+                  </div>
+                  <p className="text-xs text-slate-400 line-clamp-3">{source.preview || source.text?.substring(0, 150)}</p>
+                </div>
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Source Reference Component - inline numbered badges like ① ② ③
+function SourceRef({ 
+  sourceIndex, 
+  source, 
+  onClick 
+}: { 
+  sourceIndex: number; 
+  source?: SummarySource;
+  onClick?: (pageNumber: number, textToHighlight?: string) => void;
+}) {
+  const circledNumbers = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩', '⑪', '⑫', '⑬', '⑭', '⑮', '⑯', '⑰', '⑱', '⑲', '⑳'];
+  const displayNumber = sourceIndex < 20 ? circledNumbers[sourceIndex] : `[${sourceIndex + 1}]`;
+
+  return (
+    <button
+      onClick={() => source && onClick?.(source.pageNumber, source.text)}
+      className="inline-flex items-center justify-center mx-0.5 px-1.5 py-0.5 text-xs font-medium 
+                 bg-cyan-500/20 text-cyan-400 rounded hover:bg-cyan-500/30 transition-colors cursor-pointer"
+      title={source ? `Page ${source.pageNumber}: ${source.preview?.substring(0, 100) || ''}...` : `Source ${sourceIndex + 1}`}
+    >
+      {displayNumber}
+    </button>
+  );
+}
+
+// Process text to replace source citations with clickable badges
+function TextWithSourceRefs({ 
+  text, 
+  sources, 
+  onSourceClick 
+}: { 
+  text: string; 
+  sources?: SummarySource[];
+  onSourceClick?: (pageNumber: number, textToHighlight?: string) => void;
+}) {
+  if (!sources || sources.length === 0) return <>{text}</>;
+
+  // Match multiple citation patterns LLMs commonly use:
+  // [Source 1], [Source 1, 2], [Sources 1, 2], [Source 1, p. 1], [1], (Source 1), etc.
+  const patterns = [
+    /\[Sources?\s*[\d,\s;p.\-–and]+\]/gi,           // [Source 1], [Sources 1, 2], [Source 1-3]
+    /\[(?:Ref|Reference)s?\s*[\d,\s;p.\-–and]+\]/gi, // [Ref 1], [Reference 1, 2]
+    /\[\d+(?:\s*[,;]\s*\d+)*\]/g,                    // [1], [1, 2, 3], [1; 2]
+    /\(Sources?\s*[\d,\s;p.\-–and]+\)/gi,           // (Source 1), (Sources 1, 2)
+  ];
+  
+  // Combine all patterns
+  const combinedPattern = new RegExp(
+    patterns.map(p => p.source).join('|'),
+    'gi'
+  );
+
+  const parts: (string | JSX.Element)[] = [];
+  let lastIndex = 0;
+  let match;
+
+  while ((match = combinedPattern.exec(text)) !== null) {
+    // Add text before match
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+
+    // Extract all numbers from the match
+    const fullMatch = match[0];
+    const allNumbers = fullMatch.match(/\d+/g) || [];
+    
+    // For patterns like "1-3" or "1–3", expand the range
+    const expandedNumbers: number[] = [];
+    const rangeMatch = fullMatch.match(/(\d+)\s*[-–]\s*(\d+)/);
+    if (rangeMatch) {
+      const start = parseInt(rangeMatch[1]);
+      const end = parseInt(rangeMatch[2]);
+      for (let i = start; i <= end && i <= sources.length; i++) {
+        expandedNumbers.push(i);
+      }
+    } else {
+      allNumbers.forEach(n => expandedNumbers.push(parseInt(n)));
+    }
+    
+    // Get unique numbers and create refs
+    const uniqueNums = [...new Set(expandedNumbers)].filter(n => n > 0 && n <= sources.length);
+    
+    if (uniqueNums.length > 0) {
+      uniqueNums.forEach((num, i) => {
+        const sourceIdx = num - 1;
+        const source = sources[sourceIdx];
+        if (source) {
+          parts.push(
+            <SourceRef 
+              key={`${match!.index}-${i}-${num}`}
+              sourceIndex={sourceIdx} 
+              source={source}
+              onClick={onSourceClick}
+            />
+          );
+        }
+      });
+    } else {
+      // No valid source numbers found, keep original text
+      parts.push(fullMatch);
+    }
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  // Add remaining text
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+
+  return <>{parts}</>;
 }
 
 // Citation Card Component
-function CitationCard({ citation, index }: { citation: Citation; index: number }) {
+function CitationCard({ 
+  citation, 
+  index,
+  onPageClick 
+}: { 
+  citation: Citation; 
+  index: number;
+  onPageClick?: (pageNumber: number, textToHighlight?: string) => void;
+}) {
   return (
-    <div className="p-3 bg-slate-700/30 rounded-xl border border-slate-600/30 hover:border-orange-500/30 transition-colors">
+    <button
+      onClick={() => onPageClick?.(citation.pageNumber, citation.text)}
+      className="w-full p-3 bg-slate-700/30 rounded-xl border border-slate-600/30 hover:border-orange-500/30 transition-colors text-left"
+    >
       <div className="flex items-start gap-2">
         <div className="flex-shrink-0 w-6 h-6 rounded-lg bg-gradient-to-br from-red-500 to-orange-500 
                        flex items-center justify-center text-xs font-bold text-white">
@@ -22,16 +209,17 @@ function CitationCard({ citation, index }: { citation: Citation; index: number }
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1">
             <span className="text-xs font-medium text-orange-400">Page {citation.pageNumber}</span>
+            <span className="text-[10px] text-slate-500">• Click to highlight</span>
           </div>
           <p className="text-xs text-slate-400 line-clamp-2">"{citation.text}"</p>
         </div>
       </div>
-    </div>
+    </button>
   );
 }
 
-// Markdown components with custom styling
-const MarkdownComponents = {
+// Markdown components with custom styling and source ref support
+const createMarkdownComponents = (sources?: SummarySource[], onSourceClick?: (pageNumber: number, textToHighlight?: string) => void) => ({
   h1: ({ children }: any) => (
     <h1 className="text-2xl font-bold text-slate-100 mt-4 mb-2">{children}</h1>
   ),
@@ -44,18 +232,40 @@ const MarkdownComponents = {
   h4: ({ children }: any) => (
     <h4 className="text-base font-semibold text-slate-200 mt-2 mb-1">{children}</h4>
   ),
-  p: ({ children }: any) => (
-    <p className="text-slate-200 leading-relaxed mb-3 last:mb-0">{children}</p>
-  ),
+  p: ({ children }: any) => {
+    const processChildren = (child: any): any => {
+      if (typeof child === 'string') {
+        return <TextWithSourceRefs text={child} sources={sources} onSourceClick={onSourceClick} />;
+      }
+      return child;
+    };
+    
+    const processed = Array.isArray(children) 
+      ? children.map((child, i) => <span key={i}>{processChildren(child)}</span>)
+      : processChildren(children);
+    
+    return <p className="text-slate-200 leading-relaxed mb-3 last:mb-0">{processed}</p>;
+  },
   ul: ({ children }: any) => (
     <ul className="list-disc list-inside space-y-1 mb-3 text-slate-200">{children}</ul>
   ),
   ol: ({ children }: any) => (
     <ol className="list-decimal list-inside space-y-1 mb-3 text-slate-200">{children}</ol>
   ),
-  li: ({ children }: any) => (
-    <li className="text-slate-200">{children}</li>
-  ),
+  li: ({ children }: any) => {
+    const processChildren = (child: any): any => {
+      if (typeof child === 'string') {
+        return <TextWithSourceRefs text={child} sources={sources} onSourceClick={onSourceClick} />;
+      }
+      return child;
+    };
+    
+    const processed = Array.isArray(children) 
+      ? children.map((child, i) => <span key={i}>{processChildren(child)}</span>)
+      : processChildren(children);
+    
+    return <li className="text-slate-200">{processed}</li>;
+  },
   strong: ({ children }: any) => (
     <strong className="font-semibold text-slate-100">{children}</strong>
   ),
@@ -119,9 +329,9 @@ const MarkdownComponents = {
   td: ({ children }: any) => (
     <td className="px-4 py-2 text-sm text-slate-300">{children}</td>
   ),
-};
+});
 
-export function MessageBubble({ message }: MessageBubbleProps) {
+export function MessageBubble({ message, onPageClick }: MessageBubbleProps) {
   const isUser = message.role === 'user';
 
   // Agent icon based on type
@@ -194,6 +404,9 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         return 'from-emerald-500 to-teal-600';
     }
   };
+
+  // Create markdown components with source ref support
+  const MarkdownComponents = createMarkdownComponents(message.summarySources, onPageClick);
 
   if (isUser) {
     return (
@@ -271,20 +484,29 @@ export function MessageBubble({ message }: MessageBubbleProps) {
               <ReactMarkdown components={MarkdownComponents}>
                 {message.content}
               </ReactMarkdown>
+              {/* Show sources button for summaries */}
+              {message.summarySources && message.summarySources.length > 0 && (
+                <SourcesButton sources={message.summarySources} onSourceClick={onPageClick} />
+              )}
             </div>
           )}
 
-          {/* PDF response with citations */}
+          {/* PDF response with citations and sources */}
           {message.type === 'pdf' && (
             <div className="space-y-4">
-              {/* Answer text */}
+              {/* Answer text with source refs */}
               <div className="prose-custom">
                 <ReactMarkdown components={MarkdownComponents}>
                   {message.content}
                 </ReactMarkdown>
               </div>
 
-              {/* Citations */}
+              {/* Summary Sources (for initial summary) */}
+              {message.summarySources && message.summarySources.length > 0 && (
+                <SourcesButton sources={message.summarySources} onSourceClick={onPageClick} />
+              )}
+
+              {/* Citations (for Q&A responses) */}
               {message.citations && message.citations.length > 0 && (
                 <div className="mt-4 pt-4 border-t border-slate-700/50">
                   <div className="flex items-center gap-2 text-slate-300 mb-3">
@@ -292,11 +514,16 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
                             d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                     </svg>
-                    <span className="text-sm font-medium">Sources ({message.citations.length})</span>
+                    <span className="text-sm font-medium">Citations ({message.citations.length})</span>
                   </div>
                   <div className="grid gap-2">
                     {message.citations.map((citation, index) => (
-                      <CitationCard key={citation.chunkId} citation={citation} index={index} />
+                      <CitationCard 
+                        key={citation.chunkId} 
+                        citation={citation} 
+                        index={index}
+                        onPageClick={onPageClick}
+                      />
                     ))}
                   </div>
                 </div>

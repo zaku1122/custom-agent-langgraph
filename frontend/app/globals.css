@@ -213,6 +213,30 @@
   animation: pulse-soft 2s ease-in-out infinite;
 }
 
+/* PDF Source Highlight - High visibility */
+.source-highlight {
+  background-color: rgba(250, 204, 21, 0.5) !important; /* Yellow for better visibility */
+  border-radius: 2px;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  transition: background-color 0.3s ease;
+  box-shadow: 0 0 12px rgba(250, 204, 21, 0.6);
+  animation: highlight-pulse 1.5s ease-in-out infinite;
+  position: relative;
+  z-index: 10;
+}
+
+@keyframes highlight-pulse {
+  0%, 100% {
+    background-color: rgba(250, 204, 21, 0.5);
+    box-shadow: 0 0 12px rgba(250, 204, 21, 0.6);
+  }
+  50% {
+    background-color: rgba(250, 204, 21, 0.7);
+    box-shadow: 0 0 20px rgba(250, 204, 21, 0.8);
+  }
+}
+
 /* Body styles */
 body {
   background: var(--background);

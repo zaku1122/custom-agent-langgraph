@@ -8,9 +8,10 @@ interface MessageListProps {
   messages: Message[];
   isLoading: boolean;
   currentAgent: string | null;
+  onPageClick?: (pageNumber: number, textToHighlight?: string) => void;
 }
 
-export function MessageList({ messages, isLoading, currentAgent }: MessageListProps) {
+export function MessageList({ messages, isLoading, currentAgent, onPageClick }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -90,11 +91,11 @@ export function MessageList({ messages, isLoading, currentAgent }: MessageListPr
     <div ref={containerRef} className="flex-1 overflow-y-auto px-4 py-6">
       <div className="max-w-4xl mx-auto">
         {messages.map(message => (
-          <MessageBubble key={message.id} message={message} />
+          <MessageBubble key={message.id} message={message} onPageClick={onPageClick} />
         ))}
 
-        {/* Agent activity indicator */}
-        {isLoading && currentAgent && (
+        {/* Agent activity indicator - don't show for document/pdf uploads (they have their own loading message) */}
+        {isLoading && currentAgent && !['document', 'pdf'].includes(currentAgent) && (
           <div className="flex items-center gap-2 text-sm text-slate-400 mb-4 ml-2">
             <div className="w-2 h-2 bg-cyan-400 rounded-full animate-pulse" />
             <span>
@@ -111,4 +112,3 @@ export function MessageList({ messages, isLoading, currentAgent }: MessageListPr
     </div>
   );
 }
-

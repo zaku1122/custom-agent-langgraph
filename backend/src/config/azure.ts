@@ -32,6 +32,12 @@ export const azureConfig = {
     deployment: process.env.AZURE_OPENAI_IMAGE_DEPLOYMENT || 'dall-e-3',
     apiVersion: process.env.AZURE_OPENAI_IMAGE_API_VERSION || '2024-02-01',
   },
+  embeddings: {
+    endpoint: process.env.AZURE_OPENAI_EMBEDDINGS_ENDPOINT || process.env.AZURE_OPENAI_ENDPOINT!,
+    apiKey: process.env.AZURE_OPENAI_EMBEDDINGS_API_KEY || process.env.AZURE_OPENAI_API_KEY!,
+    deployment: process.env.AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT || 'text-embedding-ada-002',
+    apiVersion: process.env.AZURE_OPENAI_EMBEDDINGS_API_VERSION || '2024-10-21',
+  },
   bing: {
     apiKey: process.env.AZURE_BING_SEARCH_KEY || '',
     endpoint: process.env.AZURE_BING_SEARCH_ENDPOINT || 'https://api.bing.microsoft.com/v7.0/search',
@@ -51,6 +57,13 @@ export const imageClient = new AzureOpenAI({
   endpoint: azureConfig.image.endpoint,
   apiVersion: azureConfig.image.apiVersion,
   deployment: azureConfig.image.deployment,
+});
+
+export const embeddingsClient = new AzureOpenAI({
+  apiKey: azureConfig.embeddings.apiKey,
+  endpoint: azureConfig.embeddings.endpoint,
+  apiVersion: azureConfig.embeddings.apiVersion,
+  deployment: azureConfig.embeddings.deployment,
 });
 
 // Logging utility for debugging

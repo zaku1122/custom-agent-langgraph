@@ -7,42 +7,74 @@ import { ChatInput } from './ChatInput';
 import { PdfViewer } from './pdf/PdfViewer';
 
 export function ChatContainer() {
-  const { messages, isLoading, currentAgent, sendMessage, stopGeneration, clearMessages } = useChat();
+  const { messages, isLoading, currentAgent, sendMessage, stopGeneration, clearMessages, clearCurrentDocument } = useChat();
   
-  // PDF state
-  const [attachedPdf, setAttachedPdf] = useState<File | null>(null);
+  // File state (supports PDF, DOCX, TXT, CSV, XLSX, images)
+  const [attachedFile, setAttachedFile] = useState<File | null>(null);
   const [selectedText, setSelectedText] = useState<string>('');
+  const [selectedPage, setSelectedPage] = useState<number | null>(null); // Page where text was selected
   const [showPdfViewer, setShowPdfViewer] = useState(false);
+  const [highlightedPage, setHighlightedPage] = useState<number | null>(null);
+  const [highlightedText, setHighlightedText] = useState<string | null>(null);
 
-  // Handle PDF attachment from ChatInput
-  const handlePdfAttach = useCallback((file: File | null) => {
-    setAttachedPdf(file);
-    if (file) {
+  // Check if attached file is a PDF (for PDF viewer)
+  const isPdf = attachedFile?.type === 'application/pdf';
+
+  // Handle file attachment from ChatInput
+  const handleFileAttach = useCallback((file: File | null) => {
+    setAttachedFile(file);
+    if (file && file.type === 'application/pdf') {
       setShowPdfViewer(true);
     } else {
       setShowPdfViewer(false);
       setSelectedText('');
+      setSelectedPage(null);
     }
   }, []);
 
-  // Handle text selection from PDF viewer
+  // Handle text selection from PDF viewer - store both text AND page number
   const handleTextSelect = useCallback((text: string, page: number) => {
     setSelectedText(text);
+    setSelectedPage(page); // Store the page where text was selected
   }, []);
 
-  // Handle send with PDF and selected text
-  const handleSend = useCallback((message: string, pdfFile?: File) => {
-    sendMessage(message, pdfFile, selectedText);
-    // Clear selected text after sending
+  // Handle send with file and selected text
+  const handleSend = useCallback((message: string, file?: File) => {
+    sendMessage(message, file, selectedText, selectedPage ?? undefined);
+    // Clear selected text and page after sending
     setSelectedText('');
-  }, [sendMessage, selectedText]);
+    setSelectedPage(null);
+  }, [sendMessage, selectedText, selectedPage]);
 
-  // Close PDF viewer
-  const handleClosePdf = useCallback(() => {
+  // Close file/PDF viewer
+  const handleCloseFile = useCallback(() => {
     setShowPdfViewer(false);
-    setAttachedPdf(null);
+    setAttachedFile(null);
     setSelectedText('');
-  }, []);
+    setSelectedPage(null);
+    setHighlightedPage(null);
+    setHighlightedText(null);
+    clearCurrentDocument(); // Clear stored document ID for queries
+  }, [clearCurrentDocument]);
+
+  // Handle page click from sources/citations (navigate PDF to that page and highlight text)
+  const handlePageClick = useCallback((pageNumber: number, textToHighlight?: string) => {
+    // If PDF viewer is not visible, show it
+    if (isPdf && !showPdfViewer) {
+      setShowPdfViewer(true);
+    }
+    // Set highlighted page to trigger navigation
+    setHighlightedPage(pageNumber);
+    // Set text to highlight (if provided)
+    if (textToHighlight) {
+      setHighlightedText(textToHighlight);
+    }
+    // Clear highlights after a delay
+    setTimeout(() => {
+      setHighlightedPage(null);
+      setHighlightedText(null);
+    }, 5000); // 5 seconds to read the highlighted text
+  }, [isPdf, showPdfViewer]);
 
   // Get agent display info
   const getAgentInfo = () => {
@@ -86,24 +118,37 @@ export function ChatContainer() {
 
           {/* Actions */}
           <div className="flex items-center gap-2">
-            {/* PDF indicator */}
-            {attachedPdf && (
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-orange-500/20 border border-orange-500/30">
-                <svg className="w-4 h-4 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            {/* File indicator */}
+            {attachedFile && (
+              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full border ${
+                isPdf ? 'bg-orange-500/20 border-orange-500/30' : 'bg-cyan-500/20 border-cyan-500/30'
+              }`}>
+                <svg className={`w-4 h-4 ${isPdf ? 'text-orange-400' : 'text-cyan-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
                         d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
-                <span className="text-xs text-orange-400 font-medium truncate max-w-[100px]">
-                  {attachedPdf.name}
+                <span className={`text-xs font-medium truncate max-w-[100px] ${isPdf ? 'text-orange-400' : 'text-cyan-400'}`}>
+                  {attachedFile.name}
                 </span>
+                {isPdf && (
+                  <button
+                    onClick={() => setShowPdfViewer(!showPdfViewer)}
+                    className="p-1 hover:bg-orange-500/20 rounded transition-colors"
+                    title={showPdfViewer ? 'Hide PDF' : 'Show PDF'}
+                  >
+                    <svg className={`w-3 h-3 text-orange-400 transition-transform ${showPdfViewer ? 'rotate-180' : ''}`} 
+                         fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+                )}
                 <button
-                  onClick={() => setShowPdfViewer(!showPdfViewer)}
-                  className="p-1 hover:bg-orange-500/20 rounded transition-colors"
-                  title={showPdfViewer ? 'Hide PDF' : 'Show PDF'}
+                  onClick={handleCloseFile}
+                  className={`p-1 rounded transition-colors ${isPdf ? 'hover:bg-orange-500/20' : 'hover:bg-cyan-500/20'}`}
+                  title="Remove file"
                 >
-                  <svg className={`w-3 h-3 text-orange-400 transition-transform ${showPdfViewer ? 'rotate-180' : ''}`} 
-                       fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  <svg className={`w-3 h-3 ${isPdf ? 'text-orange-400' : 'text-cyan-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                   </svg>
                 </button>
               </div>
@@ -139,7 +184,7 @@ export function ChatContainer() {
       {/* Main Content Area */}
       <div className="flex-1 flex overflow-hidden">
         {/* PDF Viewer (shown when PDF is attached and viewer is open) */}
-        {attachedPdf && showPdfViewer && (
+        {attachedFile && isPdf && showPdfViewer && (
           <div className="w-1/2 max-w-[600px] border-r border-slate-700/50 flex flex-col">
             {/* PDF Header */}
             <div className="flex items-center justify-between px-4 py-2 bg-slate-800/50 border-b border-slate-700/50">
@@ -148,10 +193,10 @@ export function ChatContainer() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
                         d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
-                <span className="text-sm font-medium text-slate-200 truncate">{attachedPdf.name}</span>
+                <span className="text-sm font-medium text-slate-200 truncate">{attachedFile.name}</span>
               </div>
               <button
-                onClick={handleClosePdf}
+                onClick={handleCloseFile}
                 className="p-1 hover:bg-slate-700/50 rounded text-slate-400 hover:text-slate-200 transition-colors"
                 title="Close PDF"
               >
@@ -186,10 +231,11 @@ export function ChatContainer() {
             {/* PDF Viewer */}
             <div className="flex-1 overflow-hidden p-2">
               <PdfViewer
-                file={attachedPdf}
+                file={attachedFile}
                 onTextSelect={handleTextSelect}
                 selectedText={selectedText}
-                highlightedPage={null}
+                highlightedPage={highlightedPage}
+                highlightedText={highlightedText}
               />
             </div>
           </div>
@@ -201,16 +247,17 @@ export function ChatContainer() {
           <MessageList 
             messages={messages} 
             isLoading={isLoading} 
-            currentAgent={currentAgent} 
+            currentAgent={currentAgent}
+            onPageClick={isPdf && attachedFile ? handlePageClick : undefined}
           />
 
-          {/* Input area with PDF upload */}
+          {/* Input area with file upload */}
           <ChatInput 
             onSend={handleSend} 
             isLoading={isLoading} 
             onStop={stopGeneration}
-            onPdfAttach={handlePdfAttach}
-            attachedPdf={attachedPdf}
+            onFileAttach={handleFileAttach}
+            attachedFile={attachedFile}
             selectedText={selectedText}
           />
         </div>

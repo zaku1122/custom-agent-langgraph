@@ -1,25 +1,80 @@
 'use client';
 
 import { useState, useCallback, useRef } from 'react';
-import { Message, StreamChunk, SearchResult, Citation, FileResult } from '../types/chat';
+import { Message, StreamChunk, SearchResult, FileResult, SummarySource } from '../types/chat';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+
+// Auto-detect if user wants a summary vs asking a specific question
+function detectSummaryIntent(query: string, selectedText?: string): boolean {
+  // If there's selected text, always treat as a question about that text
+  if (selectedText && selectedText.trim().length > 0) {
+    return false;
+  }
+  
+  const q = query.toLowerCase().trim();
+  
+  // Empty query or very short → summary
+  if (q.length === 0 || q.length < 5) {
+    return true;
+  }
+  
+  // Question indicators → NOT a summary request
+  const questionPatterns = [
+    /^(what|why|how|when|where|who|which|whose|whom)\b/i,
+    /^(is|are|was|were|do|does|did|can|could|will|would|should|has|have|had)\b/i,
+    /^(tell me|explain|describe|show me|find|list|give me|get me)\b/i,
+    /\?$/,  // Ends with question mark
+  ];
+  
+  for (const pattern of questionPatterns) {
+    if (pattern.test(q)) {
+      return false; // It's a question
+    }
+  }
+  
+  // Summary indicators → summary request
+  const summaryPatterns = [
+    /\b(summarize|summary|overview|main points|key points|tldr|tl;dr|gist)\b/i,
+    /\b(what is this|what's this|about this)\s*(document|pdf|file)?$/i,
+  ];
+  
+  for (const pattern of summaryPatterns) {
+    if (pattern.test(q)) {
+      return true; // It's a summary request
+    }
+  }
+  
+  // Default: if query is short and doesn't look like a question, summarize
+  // If query is longer, treat as a question
+  return q.split(/\s+/).length < 4;
+}
 
 export function useChat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [currentAgent, setCurrentAgent] = useState<string | null>(null);
+  const [currentDocumentId, setCurrentDocumentId] = useState<string | null>(null);
+  const [currentPdfName, setCurrentPdfName] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const generateId = () => Math.random().toString(36).substring(2, 15);
 
-  // Upload any document and get document ID + analysis
-  const uploadDocument = async (file: File): Promise<{ documentId: string; analysis: any } | null> => {
+  // Upload document and get document ID + analysis + summary/sources for PDF
+  const uploadDocument = async (file: File): Promise<{ 
+    documentId: string; 
+    analysis: any;
+    summary?: string;
+    summarySources?: SummarySource[];
+  } | null> => {
     try {
       const formData = new FormData();
       formData.append('file', file);
 
-      const response = await fetch(`${API_URL}/documents/upload`, {
+      const isPdf = file.type === 'application/pdf';
+      const endpoint = isPdf ? `${API_URL}/pdf/upload` : `${API_URL}/documents/upload`;
+
+      const response = await fetch(endpoint, {
         method: 'POST',
         body: formData,
       });
@@ -29,18 +84,82 @@ export function useChat() {
       }
 
       const data = await response.json();
-      return { documentId: data.documentId, analysis: data.analysis };
+      
+      if (isPdf) {
+        // PDF endpoint returns: { documentId, summary, summarySources, ... }
+        return { 
+          documentId: data.documentId, 
+          analysis: {
+            summary: data.summary,
+            keyPoints: [], // PDF endpoint doesn't provide keyPoints
+          },
+          summary: data.summary,
+          summarySources: data.summarySources,
+        };
+      } else {
+        // Document endpoint returns: { documentId, analysis, ... }
+        return { documentId: data.documentId, analysis: data.analysis };
+      }
     } catch (error) {
       console.error('Document upload error:', error);
       return null;
     }
   };
 
+  // Get detailed summary (map-reduce) for a document
+  const getDetailedSummary = async (
+    documentId: string,
+    assistantMessageId: string,
+    pdfName?: string
+  ) => {
+    // Show progress
+    setMessages(prev =>
+      prev.map(m =>
+        m.id === assistantMessageId
+          ? { ...m, content: 'Generating detailed summary...', type: 'loading' }
+          : m
+      )
+    );
+
+    const response = await fetch(`${API_URL}/pdf/summarize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ documentId }),
+      signal: abortControllerRef.current?.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error('Summarization failed');
+    }
+
+    const result = await response.json();
+    
+    // Update message with detailed summary and sources
+    setMessages(prev =>
+      prev.map(m =>
+        m.id === assistantMessageId
+          ? { 
+              ...m, 
+              content: result.summary,
+              type: 'text',
+              agentType: 'pdf',
+              pdfName,
+              summarySources: result.sources,
+            }
+          : m
+      )
+    );
+
+    return result;
+  };
+
   // Query document with streaming
   const queryDocument = async (
     documentId: string,
     query: string,
-    assistantMessageId: string
+    assistantMessageId: string,
+    selectedText?: string,
+    selectedPage?: number
   ) => {
     const response = await fetch(`${API_URL}/documents/query/stream`, {
       method: 'POST',
@@ -86,7 +205,6 @@ export function useChat() {
             }
 
             if (data.type === 'info') {
-              // Document info received
               setCurrentAgent('document');
             }
           } catch (e) {
@@ -97,40 +215,19 @@ export function useChat() {
     }
   };
 
-  // Upload PDF and get document ID (legacy support)
-  const uploadPdf = async (file: File): Promise<string | null> => {
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-
-      const response = await fetch(`${API_URL}/pdf/upload`, {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        throw new Error('PDF upload failed');
-      }
-
-      const data = await response.json();
-      return data.documentId;
-    } catch (error) {
-      console.error('PDF upload error:', error);
-      return null;
-    }
-  };
-
-  // Query PDF with streaming
+  // Query PDF with streaming - sources are returned per-query from backend
   const queryPdf = async (
     documentId: string,
     query: string,
     assistantMessageId: string,
-    selectedText?: string
+    selectedText?: string,
+    selectedPage?: number,
+    pdfName?: string
   ) => {
     const response = await fetch(`${API_URL}/pdf/query/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ documentId, query, selectedText }),
+      body: JSON.stringify({ documentId, query, selectedText, selectedPage }),
       signal: abortControllerRef.current?.signal,
     });
 
@@ -146,7 +243,8 @@ export function useChat() {
     }
 
     let accumulatedContent = '';
-    let citations: Citation[] = [];
+    let existingPdfName: string | undefined = pdfName;
+    let querySources: SummarySource[] = []; // Sources specific to this query
 
     while (true) {
       const { done, value } = await reader.read();
@@ -160,23 +258,26 @@ export function useChat() {
           try {
             const data = JSON.parse(line.slice(6));
 
-            if (data.type === 'citation') {
-              citations.push(data.content);
+            // Capture query-specific sources (from relevant chunks)
+            if (data.type === 'sources' && Array.isArray(data.content)) {
+              querySources = data.content;
+              // Update message with new sources immediately
               setMessages(prev =>
                 prev.map(m =>
                   m.id === assistantMessageId
-                    ? { ...m, citations: [...citations], type: 'pdf', agentType: 'pdf' }
+                    ? { ...m, summarySources: querySources, pdfName: existingPdfName }
                     : m
                 )
               );
             }
 
+            // Stream text chunks with the query-specific sources
             if (data.type === 'text_chunk') {
               accumulatedContent += data.content;
               setMessages(prev =>
                 prev.map(m =>
                   m.id === assistantMessageId
-                    ? { ...m, content: accumulatedContent, type: 'pdf', agentType: 'pdf', citations }
+                    ? { ...m, content: accumulatedContent, type: 'pdf', agentType: 'pdf', pdfName: existingPdfName, summarySources: querySources }
                     : m
                 )
               );
@@ -188,15 +289,16 @@ export function useChat() {
       }
     }
 
-    return { content: accumulatedContent, citations };
+    return { content: accumulatedContent, sources: querySources };
   };
 
-  const sendMessage = useCallback(async (content: string, attachedFile?: File, selectedText?: string) => {
+  const sendMessage = useCallback(async (content: string, attachedFile?: File, selectedText?: string, selectedPage?: number) => {
     if ((!content.trim() && !attachedFile) || isLoading) return;
 
     // Determine file type
+    const isPdf = attachedFile?.type === 'application/pdf';
     const isDocument = attachedFile && (
-      attachedFile.type === 'application/pdf' ||
+      isPdf ||
       attachedFile.type.includes('word') ||
       attachedFile.type.startsWith('text/')
     );
@@ -205,7 +307,8 @@ export function useChat() {
     // Build user message content
     let displayContent = content.trim() || (attachedFile ? `Analyze this ${isImage ? 'image' : 'document'}` : '');
     if (selectedText) {
-      displayContent = `[About: "${selectedText.substring(0, 50)}${selectedText.length > 50 ? '...' : ''}"]\n\n${displayContent}`;
+      const pageInfo = selectedPage ? ` (Page ${selectedPage})` : '';
+      displayContent = `[About: "${selectedText.substring(0, 50)}${selectedText.length > 50 ? '...' : ''}"${pageInfo}]\n\n${displayContent}`;
     }
 
     // Add user message
@@ -214,7 +317,7 @@ export function useChat() {
       role: 'user',
       content: displayContent,
       type: 'text',
-      pdfName: attachedFile?.name, // Keep for backwards compatibility
+      pdfName: attachedFile?.name,
       timestamp: new Date(),
     };
 
@@ -239,13 +342,13 @@ export function useChat() {
 
       // If file is attached, handle it with document loader
       if (attachedFile) {
-        setCurrentAgent(isImage ? 'image' : 'document');
+        setCurrentAgent(isPdf ? 'pdf' : (isImage ? 'image' : 'document'));
         
         // Show uploading status
         setMessages(prev =>
           prev.map(m =>
             m.id === assistantMessageId
-              ? { ...m, content: `Uploading and processing ${isImage ? 'image' : 'document'}...`, type: 'loading' }
+              ? { ...m, content: `Uploading and processing ${isPdf ? 'PDF' : (isImage ? 'image' : 'document')}...`, type: 'loading' }
               : m
           )
         );
@@ -257,34 +360,60 @@ export function useChat() {
           throw new Error('Failed to upload file');
         }
 
-        // Show analysis first if available
-        if (result.analysis?.summary) {
+        const userQuery = content.trim();
+        const hasSources = result.summarySources && result.summarySources.length > 0;
+        
+        // Store document ID for subsequent queries with selected text
+        if (isPdf) {
+          setCurrentDocumentId(result.documentId);
+          setCurrentPdfName(attachedFile.name);
+        }
+
+        // For PDFs: auto-detect if user wants summary vs asking a question
+        if (isPdf) {
+          const shouldSummarize = detectSummaryIntent(userQuery, selectedText);
+          
+          if (shouldSummarize) {
+            // No specific question - provide detailed summary
+            await getDetailedSummary(result.documentId, assistantMessageId, attachedFile.name);
+          } else {
+            // User asked a specific question - answer it directly
+            await queryPdf(result.documentId, userQuery, assistantMessageId, selectedText, selectedPage, attachedFile.name);
+          }
+        } else {
+          // Non-PDF or PDF without summary: use document query
           setMessages(prev =>
             prev.map(m =>
               m.id === assistantMessageId
-                ? { 
-                    ...m, 
-                    content: `**Document Analysis:**\n\n${result.analysis.summary}\n\n**Key Points:**\n${result.analysis.keyPoints?.map((p: string) => `• ${p}`).join('\n') || 'N/A'}\n\n---\n\n*Answering your question...*`, 
-                    type: 'text',
-                    agentType: 'answer'
-                  }
+                ? { ...m, content: 'Analyzing document...', type: 'loading' }
                 : m
             )
           );
+
+          await queryDocument(result.documentId, content.trim() || 'Summarize this document', assistantMessageId, selectedText, selectedPage);
         }
-
-        // Query the document
-        setMessages(prev =>
-          prev.map(m =>
-            m.id === assistantMessageId && m.content.includes('Answering your question')
-              ? { ...m }
-              : m.id === assistantMessageId
-                ? { ...m, content: 'Analyzing document...', type: 'loading' }
+        
+      } else if (currentDocumentId) {
+        // Query existing PDF (with or without selected text)
+        setCurrentAgent('pdf');
+        
+        const shouldSummarize = detectSummaryIntent(content.trim(), selectedText);
+        
+        if (shouldSummarize) {
+          // No specific question - provide detailed summary
+          await getDetailedSummary(currentDocumentId, assistantMessageId, currentPdfName || undefined);
+        } else {
+          // Answer question about selected text or general question
+          setMessages(prev =>
+            prev.map(m =>
+              m.id === assistantMessageId
+                ? { ...m, content: selectedText ? 'Analyzing selected text...' : 'Searching document...', type: 'loading', pdfName: currentPdfName || undefined }
                 : m
-          )
-        );
+            )
+          );
 
-        await queryDocument(result.documentId, content.trim() || 'Summarize this document', assistantMessageId);
+          await queryPdf(currentDocumentId, content.trim(), assistantMessageId, selectedText, selectedPage, currentPdfName || undefined);
+        }
         
       } else {
         // Regular chat flow (no PDF)
@@ -455,7 +584,7 @@ export function useChat() {
       setCurrentAgent(null);
       abortControllerRef.current = null;
     }
-  }, [messages, isLoading]);
+  }, [messages, isLoading, currentDocumentId, currentPdfName]);
 
   const stopGeneration = useCallback(() => {
     if (abortControllerRef.current) {
@@ -467,6 +596,11 @@ export function useChat() {
     setMessages([]);
   }, []);
 
+  const clearCurrentDocument = useCallback(() => {
+    setCurrentDocumentId(null);
+    setCurrentPdfName(null);
+  }, []);
+
   return {
     messages,
     isLoading,
@@ -474,5 +608,6 @@ export function useChat() {
     sendMessage,
     stopGeneration,
     clearMessages,
+    clearCurrentDocument,
   };
 }
